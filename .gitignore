@@ -1,0 +1,23 @@
+# Ignorer les environnements virtuels
+venv/
+.env/
+
+# Ignorer les fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignorer les logs
+*.log
+
+# Ignorer les fichiers temporaires
+*.tmp
+*.swp
+
+# Ignorer les fichiers et dossiers spécifiques à l’éditeur
+.vscode/
+.idea/
+
+# Ignorer les fichiers système
+.DS_Store
+Thumbs.db
