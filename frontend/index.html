@@ -1,11 +1,217 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<title>VM App</title>
-</head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VM Manager</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css?v=11"></head>
 <body>
-<h1>Bienvenue dans VM App</h1>
-<p>Interface de test</p>
+    <!-- Header -->
+    <header class="main-header">VM Manager</header>
+
+    <!-- Présentation décorative -->
+    <section class="presentation" aria-hidden="true">
+        <div class="hero-card" aria-hidden="true">
+            <p style="font-size: 1.1rem; color: var(--muted); line-height: 1.6;">
+                Bienvenue sur <strong style="color: var(--primary);">VM Manager</strong><br>
+                Gérez vos machines virtuelles simplement
+            </p>
+        </div>
+    </section>
+
+    <!-- Formulaire de connexion -->
+    <div class="container">
+        <form id="loginForm" class="form-box">
+            <h2>Connexion</h2>
+            <div class="input-row">
+                <input class="input-field" type="text" name="username" placeholder="Nom d'utilisateur" required>
+                <input class="input-field" type="password" name="password" placeholder="Mot de passe" required>
+            </div>
+            <div class="form-help">Accède à ton espace de gestion des machines virtuelles</div>
+            <button type="submit" class="primary-btn login-btn" aria-label="Se connecter">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" width="20" height="20">  <!-- add width/height -->
+                    <path d="M16 12H4m12 0l-4-4m4 4l-4 4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M21 12c0 4.97-4.03 9-9 9m9-9c0-4.97-4.03-9-9-9" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                Se connecter
+            </button>
+        </form>
+
+        <!-- Dashboard (caché par défaut) -->
+        <div id="dashboard" style="display:none;">
+            <div class="buttons">
+                <button id="createBtn">Créer une VM</button>
+                <button id="launchBtn">Mes VMs</button>
+                <button id="backBtn" style="display:none;">Retour</button>
+                <button id="logoutBtn" onclick="logout()">Déconnexion</button>
+            </div>
+
+            <!-- Create UI -->
+            <div id="createOptions" class="vm-options" style="display:none;">
+                <h2>Créer une nouvelle VM</h2>
+                
+                <!-- Note informative -->
+                <div class="note" style="margin-bottom: 1.5rem;">
+                    <strong>Remarque :</strong><br>
+                    <strong>Debian Serveur</strong> → Sans interface graphique (console texte)<br>
+                    <strong>Debian Client</strong> → Avec interface graphique XFCE<br>
+                    <strong>Windows Server</strong> → Avec interface graphique<br>
+                    <strong>Windows 11</strong> → Avec interface graphique
+                </div>
+
+                <!-- Sélection du rôle -->
+                <h3 style="margin-bottom: 1rem; font-size: 1.2rem;">1. Type de VM</h3>
+                <div class="cards-row">
+                    <div class="card role-card selected" data-role="serveur" tabindex="0" role="button" aria-pressed="true">
+                        <div class="title">🖥️ Serveur</div>
+                        <div class="sub">Configuration légère pour services</div>
+                    </div>
+                    <div class="card role-card" data-role="client" tabindex="0" role="button" aria-pressed="false">
+                        <div class="title">💻 Client</div>
+                        <div class="sub">Configuration avec interface graphique</div>
+                    </div>
+                </div>
+
+                <!-- Sélection de l'OS -->
+                <h3 style="margin: 1.5rem 0 1rem; font-size: 1.2rem;">2. Système d'exploitation</h3>
+                <div class="cards-row">
+                    <div class="card os-card" data-os="debian" tabindex="0" role="button">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/a/af/Tux.png" alt="Debian" style="width: 48px; height: 48px; margin-bottom: 1rem;">
+                        <div class="title">Debian 12</div>
+                        <div class="sub">Linux stable et léger</div>
+                    </div>
+                    <div class="card os-card" data-os="windows" tabindex="0" role="button">
+                        <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/windows8/windows8-original.svg" alt="Windows" style="width: 48px; height: 48px; margin-bottom: 1rem;">
+                        <div class="title">Windows</div>
+                        <div class="sub">Windows Server / Windows 11</div>
+                    </div>
+                </div>
+
+                <!-- Résumé de la configuration -->
+                <div class="note" id="create-note" style="margin: 1.5rem 0; padding: 1rem; background: rgba(59, 130, 246, 0.1); border-radius: 8px;">
+                    Sélectionne d'abord le type et l'OS, puis remplis les champs ci-dessous.
+                </div>
+
+                <!-- Formulaire de configuration -->
+                <h3 class="section-title">3. Configuration</h3>
+                
+                <div class="form-container">
+                    <!-- Nom de la VM -->
+                    <div class="form-group">
+                        <label for="vmNameInput">
+                            Nom de la VM <span class="required">*</span>
+                        </label>
+                        <input 
+                            id="vmNameInput" 
+                            type="text" 
+                            maxlength="64" 
+                            required 
+                            placeholder="ex: debian-client-01" 
+                            class="input-field"
+                        >
+                        <div id="vmNameHelp" class="form-help-text">
+                            Lettres, chiffres, tirets et points uniquement
+                        </div>
+                    </div>
+
+                    <!-- Nom d'utilisateur -->
+                    <div class="form-group">
+                        <label for="vmUsernameInput">
+                            Nom d'utilisateur <span class="required">*</span>
+                        </label>
+                        <input 
+                            id="vmUsernameInput" 
+                            type="text" 
+                            maxlength="32" 
+                            required 
+                            placeholder="ex: admin" 
+                            class="input-field"
+                        >
+                        <div class="form-help-text">
+                            Pour se connecter à la VM
+                        </div>
+                    </div>
+
+                    <!-- Mot de passe -->
+                    <div class="form-group">
+                        <label for="vmPasswordInput">
+                            Mot de passe <span class="required">*</span>
+                        </label>
+                        <input 
+                            id="vmPasswordInput" 
+                            type="password" 
+                            minlength="6" 
+                            required 
+                            placeholder="••••••••" 
+                            class="input-field"
+                        >
+                        <div class="form-help-text">
+                            Minimum 6 caractères
+                        </div>
+                    </div>
+
+                    <!-- Confirmation mot de passe -->
+                    <div class="form-group">
+                    <label for="vmPasswordConfirmInput">
+                        Confirmer le mot de passe <span class="required">*</span>
+                    </label>
+                    <input 
+                        id="vmPasswordConfirmInput" 
+                        type="password" 
+                        minlength="6" 
+                        required 
+                        placeholder="••••••••" 
+                        class="input-field"
+                    >
+                    <div id="passwordHelp" class="form-help-text"></div>
+                </div>
+
+                <!-- Mot de passe root OBLIGATOIRE -->
+                <div class="form-group">
+                    <label for="vmRootPasswordInput">
+                        Mot de passe root/Administrator <span class="required">*</span>
+                    </label>
+                    <input 
+                        id="vmRootPasswordInput" 
+                        type="password" 
+                        minlength="6" 
+                        required 
+                        placeholder="••••••••" 
+                        class="input-field"
+                    >
+                    <div id="rootPasswordHelp" class="form-help-text">Minimum 6 caractères. Définit le mot de passe de root (Debian) ou Administrator (Windows).</div>
+                </div>
+
+                <!-- Bouton de création -->
+                <button id="confirmCreateBtn" class="primary-btn" disabled>
+                    🚀 Créer la VM
+                </button>
+                </div>
+            </div>
+
+            <!-- Launch UI -->
+            <div id="launchOptions" class="vm-options" style="display:none;">
+                <h2>VM existantes</h2>
+                <div id="no-vms" class="note" style="display:none;">Aucune VM créée pour l'instant.</div>
+                <ul id="vm-list" class="vm-list" aria-live="polite"></ul>
+            </div>
+
+            <!-- Console de messages -->
+            <div id="apiLog" style="margin-top:30px;padding:20px;background:rgba(0,0,0,0.6);border-radius:8px;max-height:300px;overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- Overlay de chargement global -->
+    <div id="globalLoader" class="loader-overlay" style="display:none" aria-hidden="true">
+      <div class="loader-box" role="status" aria-live="polite">
+        <div class="spinner"></div>
+        <div class="loader-text">Création de la VM en cours... Cela peut prendre quelques minutes.</div>
+      </div>
+    </div>
+
+    <footer class="site-footer">Réalisé par Edib</footer>
+
+    <script src="/static/app.js?v=8"></script>
 </body>
 </html>
