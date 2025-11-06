@@ -5,16 +5,32 @@ from pathlib import Path
 import datetime
 import subprocess
 import shutil
+import os
 import re
-import config
-import xml.etree.ElementTree as ET
-import socket
 import signal
+import socket
 import sys
-import os  # ← déjà présent
+import xml.etree.ElementTree as ET
+import config
+import csv
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 # Éviter l’avertissement du plugin vagrant-winrm (inutile)
 os.environ.setdefault('VAGRANT_IGNORE_WINRM_PLUGIN', '1')
+os.environ.setdefault('VAGRANT_DEFAULT_PROVIDER', 'libvirt')  # ← forcer libvirt par défaut
+
+# Utiliser la partition si présente
+if not os.environ.get('VAGRANT_HOME') and os.path.isdir('/mnt/partition2/vagrant.d'):
+    os.environ['VAGRANT_HOME'] = '/mnt/partition2/vagrant.d'
+if not os.environ.get('TMPDIR') and os.path.isdir('/mnt/partition2/tmp'):
+    os.environ['TMPDIR'] = '/mnt/partition2/tmp'
+# Fallback vers /data (nouvel emplacement)
+if not os.environ.get('VAGRANT_HOME') and os.path.isdir('/data/vagrant.d'):
+    os.environ['VAGRANT_HOME'] = '/data/vagrant.d'
+if not os.environ.get('TMPDIR') and os.path.isdir('/data/tmp'):
+    os.environ['TMPDIR'] = '/data/tmp'
 
 # -------------------- Chemins absolus pour templates et static --------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -256,6 +272,11 @@ usermod -U root || true
     if vmdir.exists():
         return jsonify({'message': f'Nom de VM déjà utilisé : {vm_name}'}), 400
 
+    # Vérifs provider + réseau avant toute création
+    if not ensure_libvirt_provider():
+        return jsonify({'message': "Plugin vagrant-libvirt manquant. Installez-le:\n  env VAGRANT_HOME=/data/vagrant.d vagrant plugin install vagrant-libvirt"}), 500
+    ensure_libvirt_network()
+
     try:
         vmdir.mkdir()
 
@@ -386,13 +407,8 @@ echo "✅ Clavier FR activé (console)"
                 """.strip()
 
         elif os_name == "windows":
-            # Boxes libvirt disponibles: Windows 10 (client) et Server 2022 (serveur)
-            if vm_type == "serveur":
-                box_name = "peru/windows-server-2022-standard-x64-eval"
-            else:
-                # Windows 11 (libvirt) n’est pas publié → utiliser Windows 10 Enterprise eval
-                box_name = "peru/windows-10-enterprise-x64-eval"
-
+            # TEMP: forcer Server 2022 pour client/serveur (Win10/11 trop lourdes / indisponibles)
+            box_name = "peru/windows-server-2022-standard-x64-eval"
             memory, cpus, serial_console = 6144, 2, False
             provision_script = f"""
 # Langue/Clavier FR
@@ -403,15 +419,12 @@ Set-WinSystemLocale fr-FR
 Set-WinUILanguageOverride fr-FR
 Set-TimeZone -Id "Romance Standard Time"
 
-# Clavier FR pour l'écran de logon
 New-Item -Path "HKU:\\.DEFAULT\\Keyboard Layout\\Preload" -Force | Out-Null
 Set-ItemProperty -Path "HKU:\\.DEFAULT\\Keyboard Layout\\Preload" -Name "1" -Value "0000040C"
 
-# Définir le mot de passe Administrator (obligatoire)
 $adminPass = ConvertTo-SecureString "{root_password}" -AsPlainText -Force
 Set-LocalUser -Name "Administrator" -Password $adminPass
 
-# Créer l'utilisateur élève si absent et l'ajouter aux admins
 $username = "{vm_username}"
 $password = ConvertTo-SecureString "{vm_password}" -AsPlainText -Force
 $userExists = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
@@ -420,13 +433,13 @@ if (-not $userExists) {{
   Add-LocalGroupMember -Group "Administrators" -Member $username
 }}
 
-# Activer RDP (utile pour debug)
+# Activer RDP
 Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 Set-Service -Name TermService -StartupType Automatic
 Start-Service TermService
 
-Write-Host "✅ Windows configuré (FR + Admin + RDP)."
+Write-Host "✅ Windows Server configuré (FR + Admin + RDP)."
             """.strip()
 
         else:
@@ -460,7 +473,8 @@ Vagrant.configure("2") do |config|
     lv.graphics_websocket = -1
     lv.graphics_ip = "127.0.0.1"
     lv.video_type = "qxl"
-    lv.keymap = "fr"   # ← clavier VNC côté hyperviseur en FR
+    lv.keymap = "fr"
+    lv.storage_pool_name = "default"
     lv.channel :type => 'unix', :target_name => 'org.qemu.guest_agent.0', :target_type => 'virtio'
 """
         if serial_console:
@@ -469,7 +483,7 @@ Vagrant.configure("2") do |config|
         vagrantfile_content += """  end
 
   config.vm.synced_folder ".", "/vagrant", type: "rsync", rsync__auto: true, disabled: true
-  config.vm.network "private_network", type: "dhcp"
+  config.vm.network "private_network", type: "dhcp", libvirt__network_name: "default"
 """
 
         # Provisioning
@@ -548,6 +562,9 @@ def launch_vm():
         return jsonify({'message': 'VM introuvable ou accès refusé.'}), 403
     
     try:
+        if not ensure_libvirt_provider():
+            return jsonify({'message': 'Plugin libvirt manquant'}), 500
+        ensure_libvirt_network()
         subprocess.run(['vagrant', 'up', '--provider', 'libvirt'], cwd=vm_path, check=True)
         return jsonify({'message': f'VM {vm_name} lancée.'})
     except subprocess.CalledProcessError as e:
@@ -574,7 +591,7 @@ def halt_vm():
         
         # Arrêter la VM
         result = subprocess.run(
-            ['vagrant', 'halt'],
+            ['vagrant', 'halt', '--provider', 'libvirt'],
             cwd=vm_path,
             capture_output=True,
             text=True,
@@ -608,7 +625,7 @@ def delete_vm():
         return jsonify({'message': 'VM introuvable ou accès refusé.'}), 403
     
     try:
-        subprocess.run(['vagrant', 'destroy', '-f'], cwd=vm_path, check=True)
+        subprocess.run(['vagrant', 'destroy', '-f', '--provider', 'libvirt'], cwd=vm_path, check=True)
         shutil.rmtree(vm_path)
         return jsonify({'message': f'VM {vm_name} supprimée.'})
     except subprocess.CalledProcessError as e:
@@ -696,28 +713,33 @@ def start_websockify(vm_name, vnc_port):
     ws_port = find_free_port()
     if not ws_port:
         return None, None
-    
+
+    # Localiser noVNC (inclut ~/.noVNC)
+    from pathlib import Path as _P
+    candidates = [
+        os.environ.get("NOVNC_WEB") or "",
+        "/usr/share/novnc",
+        "/usr/share/webapps/novnc",
+        "/usr/local/share/novnc",
+        str(_P.home() / "noVNC"),
+    ]
+    web_dir = next((p for p in candidates if p and os.path.isdir(p)), None)
+    if not web_dir:
+        print("noVNC introuvable. Installez 'novnc' ou définissez $NOVNC_WEB.")
+        return None, None
+
+    # binaire websockify ou fallback python -m websockify
+    ws_bin = shutil.which("websockify")
+    if ws_bin:
+        cmd = [ws_bin, "--web", web_dir, str(ws_port), f"127.0.0.1:{vnc_port}"]
+    else:
+        cmd = [sys.executable, "-m", "websockify", "--web", web_dir, str(ws_port), f"127.0.0.1:{vnc_port}"]
+
     try:
-        # Lancer websockify
         process = subprocess.Popen(
-            [
-                'websockify',
-                '--web', '/usr/share/novnc',
-                f'{ws_port}',
-                f'127.0.0.1:{vnc_port}'
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            preexec_fn=os.setpgrp  # Créer un nouveau groupe de processus
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp
         )
-        
-        # Sauvegarder le processus
-        websockify_processes[vm_name] = {
-            'process': process,
-            'ws_port': ws_port,
-            'vnc_port': vnc_port
-        }
-        
+        websockify_processes[vm_name] = {'process': process, 'ws_port': ws_port, 'vnc_port': vnc_port}
         return ws_port, process
     except Exception as e:
         print(f"Erreur démarrage websockify: {e}")
@@ -812,6 +834,234 @@ def get_vnc_url(vm_name):
         'ws_port': ws_port,
         'vnc_port': vnc_port
     })
+
+def ensure_box_installed(box_name, provider="libvirt"):
+    """
+    Vérifie si la box Vagrant est installée pour le provider donné.
+    Sinon, tente de l'installer. Retourne True si OK, False sinon.
+    """
+    try:
+        res = subprocess.run(["vagrant", "box", "list"], capture_output=True, text=True, check=True)
+        if box_name in res.stdout:
+            return True
+        print(f"[ensure_box_installed] Installation de {box_name} ({provider})...")
+        add = subprocess.run(["vagrant", "box", "add", box_name, "--provider", provider, "--clean"], check=True)
+        return add.returncode == 0
+    except subprocess.CalledProcessError as e:
+        print(f"[ensure_box_installed] Erreur: {e}")
+        return False
+
+# -------------------- Helpers capacité (parsing + email + log) --------------------
+def _parse_ram_to_mb(value: str):
+    """
+    Convertit une valeur texte en Mégaoctets (MB) pour la RAM.
+    Exemples: '4096' -> 4096 MB, '4G'/'4GB'/'4Go' -> 4096 MB, '512M'/'512MB' -> 512 MB
+    """
+    if value is None:
+        return None
+    s = str(value).strip().lower().replace(',', '.')
+    m = re.match(r'^\s*(\d+(?:\.\d+)?)\s*([a-z]{0,3})\s*$', s)
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2)
+    if unit in ('', 'm', 'mb'):
+        mb = int(round(num))
+    elif unit in ('g', 'gb', 'go'):
+        mb = int(round(num * 1024))
+    else:
+        return None
+    return mb if mb > 0 else None
+
+def _parse_storage_to_gb(value: str):
+    """
+    Convertit une valeur texte en Gigaoctets (GB) pour le stockage.
+    Par défaut: GB. Ex: '80' -> 80 GB, '80GB'/'80Go' -> 80 GB, '10240MB' -> 10 GB.
+    """
+    if value is None:
+        return None
+    s = str(value).strip().lower().replace(',', '.')
+    m = re.match(r'^\s*(\d+(?:\.\d+)?)\s*([a-z]{0,3})\s*$', s)
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2)
+    if unit in ('', 'g', 'gb', 'go'):
+        gb = int(round(num))
+    elif unit in ('m', 'mb'):
+        gb = int(round(num / 1024.0))
+    elif unit in ('t', 'tb'):
+        gb = int(round(num * 1024.0))
+    else:
+        return None
+    return gb if gb > 0 else None
+
+def _append_capacity_request_log(user_dn: str, vm_name: str, resource: str, value_str: str, reason: str):
+    """
+    Journalise la demande dans un CSV (capacity_requests.csv à la racine du projet).
+    """
+    csv_path = BASE_DIR / 'capacity_requests.csv'
+    header = ['timestamp', 'user_dn', 'username', 'vm_name', 'resource', 'requested_value', 'reason']
+    row = [
+        datetime.datetime.utcnow().isoformat(),
+        user_dn,
+        getattr(current_user, 'username', ''),
+        vm_name,
+        resource,
+        value_str,
+        reason.replace('\n', ' ').strip()[:2000],
+    ]
+    write_header = not csv_path.exists()
+    with open(csv_path, 'a', encoding='utf-8', newline='') as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(header)
+        w.writerow(row)
+
+def _send_capacity_request_email(username: str, vm_name: str, resource: str, human_value: str, reason: str) -> bool:
+    """
+    Envoie un email aux admins pour une demande d’augmentation.
+    Requiert dans config.py: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, ADMIN_EMAILS (liste).
+    Optionnels: SMTP_USE_TLS (True par défaut), SMTP_USE_SSL (False par défaut).
+    """
+    smtp_host = getattr(config, 'SMTP_HOST', None)
+    smtp_port = int(getattr(config, 'SMTP_PORT', 587))
+    smtp_user = getattr(config, 'SMTP_USER', None)
+    smtp_pass = getattr(config, 'SMTP_PASSWORD', None)
+    smtp_from = getattr(config, 'SMTP_FROM', None)
+    admins = getattr(config, 'ADMIN_EMAILS', [])
+    use_tls = bool(getattr(config, 'SMTP_USE_TLS', True))
+    use_ssl = bool(getattr(config, 'SMTP_USE_SSL', False))
+
+    if not smtp_host or not smtp_from or not admins:
+        print("Email non envoyé: configuration SMTP incomplète (voir config.py).")
+        return False
+
+    subject = f"[VM Request] {username}/{vm_name} → {resource.upper()} {human_value}"
+    body = (
+        f"Demande d’augmentation de capacité\n"
+        f"- Utilisateur: {username}\n"
+        f"- VM: {vm_name}\n"
+        f"- Ressource: {resource}\n"
+        f"- Valeur demandée: {human_value}\n"
+        f"- Motif: {reason}\n"
+        f"- Horodatage (UTC): {datetime.datetime.utcnow().isoformat()}\n"
+    )
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = smtp_from
+    msg['To'] = ', '.join(admins)
+    msg.set_content(body)
+
+    try:
+        if use_ssl:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as s:
+                if smtp_user and smtp_pass:
+                    s.login(smtp_user, smtp_pass)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
+                s.ehlo()
+                if use_tls:
+                    s.starttls(context=ssl.create_default_context())
+                    s.ehlo()
+                if smtp_user and smtp_pass:
+                    s.login(smtp_user, smtp_pass)
+                s.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Erreur envoi email: {e}")
+        return False
+
+# -------------------- Nouvelle API: demande d’augmentation de capacité --------------------
+@app.route('/api/request_vm_capacity', methods=['POST'])
+@login_required
+def request_vm_capacity():
+    """
+    Permet à l'utilisateur de demander par email une augmentation de RAM ou de stockage.
+    JSON attendu:
+      {
+        "vm_name": "nomVM",
+        "resource": "ram" | "storage",
+        "value": "8GB" | "8192" | "80GB" | "80",
+        "reason": "motif obligatoire"
+      }
+    """
+    data = request.get_json() or {}
+    vm_name = (data.get('vm_name') or '').strip()
+    resource = (data.get('resource') or '').strip().lower()
+    value_str = (data.get('value') or '').strip()
+    reason = (data.get('reason') or '').strip()
+
+    if not vm_name:
+        return jsonify({'success': False, 'message': 'Nom de VM requis.'}), 400
+    if resource not in ('ram', 'storage', 'stockage', 'disk'):
+        return jsonify({'success': False, 'message': "Ressource invalide. Utilisez 'ram' ou 'storage'."}), 400
+    if not value_str:
+        return jsonify({'success': False, 'message': 'Valeur demandée requise.'}), 400
+    if not reason or len(reason) < 5:
+        return jsonify({'success': False, 'message': 'Motif requis (5 caractères minimum).'}), 400
+
+    # Vérifier la propriété
+    allowed, _vm_path = check_vm_ownership(current_user.username, vm_name)
+    if not allowed:
+        return jsonify({'success': False, 'message': 'VM introuvable ou accès refusé.'}), 403
+
+    # Parsing des valeurs
+    human_value = None
+    if resource == 'ram':
+        mb = _parse_ram_to_mb(value_str)
+        if not mb:
+            return jsonify({'success': False, 'message': "Valeur RAM invalide (ex: '8192' ou '8GB')."}), 400
+        human_value = f"{mb} MB ({mb//1024} GB)"
+        # Garde-fous simples
+        if mb < 512 or mb > 131072:  # 512MB à 128GB
+            return jsonify({'success': False, 'message': 'RAM demandée hors limites (512MB - 128GB).'}), 400
+        normalized_resource = 'ram'
+    else:
+        gb = _parse_storage_to_gb(value_str)
+        if not gb:
+            return jsonify({'success': False, 'message': "Valeur stockage invalide (ex: '80' ou '80GB')."}), 400
+        human_value = f"{gb} GB"
+        if gb < 10 or gb > 1024:  # 10GB à 1TB
+            return jsonify({'success': False, 'message': 'Stockage demandé hors limites (10GB - 1TB).'}), 400
+        normalized_resource = 'storage'
+
+    # Journaliser
+    try:
+        _append_capacity_request_log(current_user.dn, vm_name, normalized_resource, value_str, reason)
+    except Exception as e:
+        print(f"Erreur log demande capacité: {e}")
+
+    # Envoyer l'email
+    ok = _send_capacity_request_email(current_user.username, vm_name, normalized_resource, human_value, reason)
+    if not ok:
+        return jsonify({'success': False, 'message': "Votre demande a été enregistrée mais l'email n'a pas pu être envoyé (voir logs serveur)."}), 202
+
+    return jsonify({'success': True, 'message': 'Demande envoyée aux administrateurs. Vous recevrez un retour prochainement.'}), 200
+
+# -------------------- Vérifier et créer le réseau libvirt par défaut --------------------
+def ensure_libvirt_network():
+    try:
+        out = subprocess.run(["virsh","net-list","--all"], capture_output=True, text=True)
+        if "default" in out.stdout:
+            return True
+        xml = ("<network><name>default</name><forward mode='nat'/>"
+               "<bridge name='virbr0'/>"
+               "<ip address='192.168.122.1' netmask='255.255.255.0'>"
+               "<dhcp><range start='192.168.122.2' end='192.168.122.254'/></dhcp>"
+               "</ip></network>")
+        tmp = "/tmp/default-net.xml"
+        open(tmp, "w").write(xml)
+        subprocess.run(["sudo","virsh","net-define", tmp], check=True)
+        subprocess.run(["sudo","virsh","net-start", "default"], check=True)
+        subprocess.run(["sudo","virsh","net-autostart", "default"], check=True)
+        return True
+    except Exception as e:
+        print(f"[ensure_libvirt_network] {e}")
+        return False
 
 # -------------------- Lancement Flask --------------------
 if __name__ == '__main__':

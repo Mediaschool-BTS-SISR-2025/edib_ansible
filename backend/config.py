@@ -12,3 +12,12 @@ LDAP_USER_RDN_ATTR = 'uid'
 LDAP_USER_LOGIN_ATTR = 'uid'
 LDAP_BIND_USER_DN = os.getenv('LDAP_BIND_USER_DN', '')
 LDAP_BIND_USER_PASSWORD = os.getenv('LDAP_BIND_USER_PASSWORD', '')
+
+SMTP_HOST = "smtp.example.com"
+SMTP_PORT = 587          # 587 (STARTTLS) ou 465 (SSL)
+SMTP_USER = "no-reply@example.com"
+SMTP_PASSWORD = "motdepasse"
+SMTP_FROM = "no-reply@example.com"
+SMTP_USE_TLS = True      # True pour STARTTLS
+SMTP_USE_SSL = False     # True si vous utilisez le port 465
+ADMIN_EMAILS = ["admin@example.com"]  # destinataires des demandes
