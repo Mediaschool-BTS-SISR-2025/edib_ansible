@@ -150,6 +150,14 @@ La fonctionnalité de demande de ressources utilise Formspree (service tiers) po
 - L'application doit être exécutée avec un utilisateur ayant les droits d'accès à `libvirt` (souvent `root` ou membre du groupe `libvirt`).
 - Sauvegardez les VMs et configurations avant tests importants.
 
+## Windows VMs (notes de provisioning)
+
+- **Comptes créés** : après provisioning les VMs Windows fournissent trois comptes : `Administrator` (mot de passe root), un compte utilisateur personnalisé (celui indiqué lors de la création) et `vagrant` (conservé pour compatibilité). Le compte personnalisé et `vagrant` partagent le même mot de passe administrateur utilisateur.
+- **Exigences de mot de passe** : minimum 8 caractères, au moins 1 majuscule, 1 minuscule et 1 chiffre (ex. `Azerty123`).
+- **Clavier / Langue** : le provisioning configure la VM en français (AZERTY) — un redémarrage automatique applique la configuration.
+- **Arrêt (halt)** : les VM Windows peuvent résister à un arrêt gracieux ; le serveur tente d'abord un `vagrant halt` puis effectue un arrêt forcé (`virsh destroy`) si nécessaire (après timeout) pour garantir que l'action "Arrêter" fonctionne.
+- **Durée de provisioning** : prévoir 5–10 minutes pour le premier provisioning (premier boot et OOBE).
+
 ## Dépannage rapide
 
 - Si la console noVNC ne s'ouvre pas : vérifier que `noVNC/` existe, que `websockify` est installé et qu'un port libre est disponible.
