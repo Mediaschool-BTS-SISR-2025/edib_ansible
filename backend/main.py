@@ -932,19 +932,24 @@ def start_websockify(vm_name, vnc_port):
     try:
         # Chemin vers noVNC dans le projet
         novnc_path = Path(__file__).parent.parent / 'noVNC'
-        
-        # Chemin vers websockify dans le venv
+
+        # Chemin vers websockify dans un éventuel venv
         venv_websockify = Path(__file__).parent.parent / '.venv' / 'bin' / 'websockify'
         websockify_cmd = str(venv_websockify) if venv_websockify.exists() else 'websockify'
-        
+
+        # Préparer la commande en fonction de la présence de noVNC
+        cmd = [websockify_cmd, f'{ws_port}', f'127.0.0.1:{vnc_port}']
+        if novnc_path.exists():
+            cmd.insert(1, '--web')
+            cmd.insert(2, str(novnc_path))
+        else:
+            # Si noVNC absent, afficher un message clair et continuer :
+            # websockify démarrera mais la page noVNC ne sera pas servie par ce process.
+            print(f"Avis: dossier noVNC introuvable ({novnc_path}). Télécharger noVNC si vous voulez la console web intégrée.")
+
         # Lancer websockify
         process = subprocess.Popen(
-            [
-                websockify_cmd,
-                '--web', str(novnc_path),
-                f'{ws_port}',
-                f'127.0.0.1:{vnc_port}'
-            ],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             preexec_fn=os.setpgrp  # Créer un nouveau groupe de processus
