@@ -31,10 +31,11 @@
         path: '{{ dest_path }}/deploy.sh'
         mode: '0755'
 
-    - name: Run deploy.sh to setup backend and systemd service
+    - name: Run deploy.sh to setup backend and systemd service (idempotent)
       command: './deploy.sh {{ service_user }}'
       args:
         chdir: '{{ dest_path }}'
+        creates: '{{ dest_path }}/.venv/bin/activate'
 
     - name: Template .env.example from template
       template:
@@ -64,26 +65,32 @@
         daemon_reload: yes
         state: restarted
 
+    - name: Build frontend Docker image using community.docker
+      community.docker.docker_image:
+        build:
+          path: '{{ dest_path }}/frontend'
+        name: '{{ frontend_image }}'
+        source: build
 
-    - name: Build frontend Docker image
-      command: 'docker build -t {{ frontend_image }} .'
-      args:
-        chdir: '{{ dest_path }}/frontend'
-
-    - name: Stop existing frontend container if present
-      shell: |
-        if docker ps -a --format '{{"{{.Names}}"}}' | grep -q '^vm_frontend$'; then
-          docker rm -f vm_frontend || true
-        fi
+    - name: Ensure old frontend container absent
+      community.docker.docker_container:
+        name: vm_frontend
+        state: absent
+        force_kill: true
 
     - name: Run frontend container
-      command: 'docker run -d --name vm_frontend -p 8080:80 {{ frontend_image }}'
+      community.docker.docker_container:
+        name: vm_frontend
+        image: '{{ frontend_image }}'
+        state: started
+        ports:
+          - '8080:80'
+        restart_policy: unless-stopped
 
-    - name: Show systemd status for vm_manager.service
-      command: systemctl status vm_manager.service --no-pager
-      register: svc_status
-      ignore_errors: true
+    - name: Gather service facts and show vm_manager.service
+      service_facts: {}
 
-    - name: Print status
+    - name: Print vm_manager service fact if present
       debug:
-        var: svc_status.stdout_lines
+        var: ansible_facts.services['vm_manager.service']
+      when: "ansible_facts.services is defined and 'vm_manager.service' in ansible_facts.services"

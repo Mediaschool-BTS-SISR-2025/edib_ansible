@@ -36,9 +36,43 @@
 ### 2. **ansible/inventory.ini** - Hôtes cibles
 ```ini
 [vmhosts]
-localhost ansible_connection=local
+# Exemple local pour tests :
+# localhost ansible_connection=local
+
+# Exemple d'hôte distant (école) :
+# Remarques : remplacer l'adresse, l'utilisateur et le chemin vers la clé selon ton environnement
+37.64.159.66 ansible_user=edib ansible_port=2222 ansible_ssh_private_key_file=/home/edib/.ssh/mediaschool ansible_connection=ssh
 ```
-Configuré pour tests locaux ; remplacer par l'adresse IP/nom d'hôte du serveur cible pour la production.
+Le fichier `inventory.ini` peut contenir plusieurs hôtes. Ici un exemple concret est fourni pour déployer vers le serveur de l'école (adresse `37.64.159.66`). Utilise un chemin absolu pour `ansible_ssh_private_key_file` (recommandé) ; si tu utilises `ssh-agent`, tu peux omettre ce paramètre.
+
+### Configuration de l'inventaire et connexion SSH (commande fournie)
+
+Tu m'as fourni la commande SSH suivante pour te connecter au serveur :
+
+```bash
+ssh -i ./.ssh/mediaschool edib@37.64.159.66 -p 2222
+```
+
+Voici la correspondance dans `inventory.ini` (déjà appliquée dans le dépôt) :
+
+```ini
+37.64.159.66 ansible_user=edib ansible_port=2222 ansible_ssh_private_key_file=/home/edib/.ssh/mediaschool ansible_connection=ssh
+```
+
+Étapes recommandées avant de lancer le playbook :
+- Tester la connexion SSH (pour valider la clé / l'accès) :
+
+```fish
+ssh -i /home/edib/.ssh/mediaschool -p 2222 edib@37.64.159.66 'echo Connexion OK'
+```
+
+- Tester Ansible via le module `ping` :
+
+```fish
+ansible -i ansible/inventory.ini vmhosts -m ping
+```
+
+Si ces deux étapes répondent correctement, tu peux lancer le dry-run Ansible et ensuite le déploiement réel.
 
 ### 3. **ansible/templates/** - Templates de configuration
 - `vm_manager.service.j2` : unité systemd avec utilisateur, chemins, workers, port configurables
@@ -155,5 +189,4 @@ Plus ces fichiers support dans la racine du dépôt :
 
 ---
 
-**État** : ✅ Prêt pour revue du professeur
 **Dernière mise à jour** : 27 novembre 2025
