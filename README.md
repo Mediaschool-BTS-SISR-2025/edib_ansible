@@ -7,26 +7,35 @@ VM_Manager est une interface web pour gérer des machines virtuelles étudiantes
 Le projet est déployé sur `vm-manager.iris.a3n.fr` via **Docker Compose** et **Traefik**.
 
 ### Accès
-- **Frontend** : http://vm-manager.iris.a3n.fr
-- **Backend API** : https://vm-manager.iris.a3n.fr
+- **Application** : http://vm-manager.iris.a3n.fr
 
 ### Architecture de déploiement
 
 ```
 ┌─────────────────────────────────────┐
-│   Traefik (reverse proxy + TLS)    │
+│   Traefik (reverse proxy)           │
 │         admin_proxy network         │
 └────────────┬────────────────────────┘
-             │
-    ┌────────┴────────┐
-    │                 │
-┌───▼────────┐  ┌────▼──────────┐
-│  Frontend  │  │    Backend    │
-│  (nginx)   │  │ (Flask/       │
-│  Port 80   │  │  Gunicorn)    │
-└────────────┘  │  Port 5000    │
-                └───────────────┘
+             │ HTTP
+             ▼
+       ┌─────────────┐
+       │  Frontend   │
+       │   (nginx)   │  /api/* ──────┐
+       │   Port 80   │               │
+       └─────────────┘               │ proxy_pass
+                                     ▼
+                            ┌─────────────────┐
+                            │     Backend     │
+                            │ (Flask/Gunicorn)│
+                            │    Port 5000    │
+                            └─────────────────┘
 ```
+
+**Communication** :
+- Traefik route `vm-manager.iris.a3n.fr` vers le conteneur nginx (frontend)
+- nginx sert les fichiers statiques (HTML/CSS/JS)
+- nginx proxifie `/api/*` vers le backend Flask (communication interne Docker)
+- Le backend n'est pas exposé publiquement
 
 ## 📁 Structure du projet
 
@@ -97,10 +106,12 @@ docker ps --filter name=vm_manager
 
 Les labels Traefik dans `docker-compose.traefik.yml` configurent automatiquement le routage :
 
-- **Frontend** : HTTP sur `vm-manager.iris.a3n.fr` (port 80)
-- **Backend** : HTTPS sur `vm-manager.iris.a3n.fr` (port 5000, TLS via Let's Encrypt)
+- **Application web** : HTTP sur `vm-manager.iris.a3n.fr`
+- Traefik route vers le conteneur nginx (frontend)
+- nginx proxifie les appels API (`/api/*`) vers Flask en interne
+- Le backend n'est pas exposé publiquement (sécurité)
 
-Les deux services sont connectés au réseau Docker `admin_proxy` utilisé par Traefik.
+Les deux services sont connectés au réseau Docker `admin_proxy`.
 
 ## 🔧 Technologies utilisées
 
