@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    container_name: vm_manager_backend
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.vm_manager_backend.entrypoints=websecure"
+      - "traefik.http.routers.vm_manager_backend.rule=Host(`vm_manager.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.vm_manager_backend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.vm_manager_backend.service=vm_manager_backend"
+      - "traefik.http.services.vm_manager_backend.loadbalancer.server.port=5000"
+    networks:
+      - proxy
+
+  frontend:
+    build: ./frontend
+    container_name: vm_manager_frontend
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.vm_manager_frontend.entrypoints=web"
+      - "traefik.http.routers.vm_manager_frontend.rule=Host(`vm_manager.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.vm_manager_frontend.service=vm_manager_frontend"
+      - "traefik.http.services.vm_manager_frontend.loadbalancer.server.port=80"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
